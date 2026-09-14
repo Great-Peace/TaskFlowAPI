@@ -47,7 +47,13 @@ public sealed class HttpExchangeRecorder
     /// <summary>Exchanges recorded since the last <see cref="Clear"/>.</summary>
     public IReadOnlyCollection<HttpExchange> Exchanges => _exchanges.ToArray();
 
-    internal void Record(HttpExchange exchange) => _exchanges.Enqueue(exchange);
+    /// <summary>Adds an exchange to the recording.</summary>
+    /// <remarks>
+    /// Normally called by <see cref="RecordingHttpHandler"/>. Public so that the
+    /// recorder's own behaviour - redaction and rendering - can be tested without
+    /// standing up an HTTP pipeline to produce traffic.
+    /// </remarks>
+    public void Record(HttpExchange exchange) => _exchanges.Enqueue(exchange);
 
     /// <summary>Discards recorded traffic so output is attributable to a single test.</summary>
     public void Clear()

@@ -68,15 +68,30 @@ public abstract class IntegrationTestBase : IAsyncLifetime
         Api.ExecuteDbContextAsync(query);
 
     /// <summary>
-    /// Diagnostic context for a failure: the HTTP traffic and the application log.
+    /// Diagnostic context for a failure: what was sent, what came back, what went
+    /// wrong, and then the full log.
     /// </summary>
-    /// <remarks>Both are redacted; neither contains tokens or passwords.</remarks>
+    /// <remarks>
+    /// <para>
+    /// Ordered by how useful each part is when reading a failure. Warnings and errors
+    /// come first, because the exception that caused a 500 is the thing worth seeing;
+    /// left in chronological order it sits beneath dozens of lines of EF Core command
+    /// logging and is easy to scroll past in CI output.
+    /// </para>
+    /// <para>
+    /// Everything here is redacted: no bearer tokens, no passwords. These strings
+    /// reach CI logs, which are more widely readable and longer-lived than the
+    /// application's own logs.
+    /// </para>
+    /// </remarks>
     protected string Diagnostics() =>
         $"""
 
         ===== HTTP exchanges =====
         {Api.HttpRecorder.Render()}
-        ===== application log =====
-        {Api.LogSink.Render()}
+        ===== warnings and errors =====
+        {Api.LogSink.RenderProblems()}
+        ===== full application log =====
+        {Api.LogSink.Render(maxEvents: 40)}
         """;
 }

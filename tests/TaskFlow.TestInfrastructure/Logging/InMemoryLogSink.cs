@@ -35,6 +35,18 @@ public sealed class InMemoryLogSink : ILogEventSink
     }
 
     /// <summary>
+    /// Renders only warnings and errors.
+    /// </summary>
+    /// <remarks>
+    /// The full log is dominated by EF Core command logging and per-request tracing,
+    /// and the exception that actually caused a failure ends up at the bottom of
+    /// dozens of informational lines. In a CI log that is easy to scroll past. This
+    /// is rendered first, so the useful part is the part that is seen.
+    /// </remarks>
+    public string RenderProblems(int maxEvents = 20) =>
+        Render(LogEventLevel.Warning, maxEvents);
+
+    /// <summary>
     /// Renders captured events at or above <paramref name="minimumLevel"/> as text.
     /// </summary>
     /// <param name="minimumLevel">Lowest level to include.</param>
