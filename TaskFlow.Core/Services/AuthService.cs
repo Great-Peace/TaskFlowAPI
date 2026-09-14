@@ -1,15 +1,9 @@
-﻿using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
-using System;
-using System.Collections.Generic;
-using System.ComponentModel.DataAnnotations;
 using System.IdentityModel.Tokens.Jwt;
-using System.Linq;
 using System.Security.Claims;
-using System.Security.Cryptography;
-using System.Security.Principal;
 using System.Text;
-using System.Threading.Tasks;
+using TaskFlow.Core.Configuration;
 using TaskFlow.Core.DTOs;
 using TaskFlow.Core.Entities;
 using TaskFlow.Core.Interfaces;
@@ -17,23 +11,40 @@ using TaskFlow.Core.Services.Interface;
 
 namespace TaskFlow.Core.Services
 {
+    /// <summary>
+    /// Registration, authentication and JWT issuance.
+    /// </summary>
     public class AuthService : IAuthService
     {
         private readonly IUnitOfWork _unitOfWork;
-        private readonly IConfiguration _configuration;
+        private readonly JwtSettings _jwtSettings;
         private readonly IPasswordHasher _passwordHasher;
+        private readonly TimeProvider _timeProvider;
 
-        public AuthService(IUnitOfWork unitOfWork, IConfiguration configuration, IPasswordHasher passwordHasher)
+        /// <summary>Creates the service.</summary>
+        /// <param name="unitOfWork">Persistence gateway.</param>
+        /// <param name="jwtSettings">Validated JWT configuration.</param>
+        /// <param name="passwordHasher">Password hashing strategy.</param>
+        /// <param name="timeProvider">
+        /// Clock used for token expiry. Injected rather than read from
+        /// <c>DateTime.UtcNow</c> so that expiry is assertable in tests.
+        /// </param>
+        public AuthService(
+            IUnitOfWork unitOfWork,
+            IOptions<JwtSettings> jwtSettings,
+            IPasswordHasher passwordHasher,
+            TimeProvider timeProvider)
         {
             _unitOfWork = unitOfWork;
-            _configuration = configuration;
+            _jwtSettings = jwtSettings.Value;
             _passwordHasher = passwordHasher;
+            _timeProvider = timeProvider;
         }
 
+        /// <summary>Issues a signed JWT for <paramref name="user"/>.</summary>
         public string GenerateJwtToken(User user)
         {
-            var jwtSettings = _configuration.GetSection("JwtSettings");
-            var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSettings["SecretKey"]!));
+            var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_jwtSettings.SecretKey));
             var credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
 
             var claims = new[]
@@ -44,17 +55,24 @@ namespace TaskFlow.Core.Services
                 new Claim(ClaimTypes.Role, user.Role)
             };
 
+            var issuedAt = _timeProvider.GetUtcNow().UtcDateTime;
+
             var token = new JwtSecurityToken(
-                issuer: jwtSettings["Issuer"],
-                audience: jwtSettings["Audience"],
+                issuer: _jwtSettings.Issuer,
+                audience: _jwtSettings.Audience,
                 claims: claims,
-                expires: DateTime.UtcNow.AddHours(24),
+                expires: issuedAt.AddHours(_jwtSettings.ExpiryInHours),
                 signingCredentials: credentials
              );
 
             return new JwtSecurityTokenHandler().WriteToken(token);
         }
 
+        /// <summary>Authenticates a user and issues a token.</summary>
+        /// <exception cref="UnauthorizedAccessException">
+        /// The e-mail is unknown or the password does not match. The same message is
+        /// used for both so the response cannot be used to enumerate accounts.
+        /// </exception>
         public async Task<AuthResponseDto> LoginAsync(LoginDto loginDto)
         {
             var user = await _unitOfWork.Users.GetByEmailAsync(loginDto.Email);
@@ -77,6 +95,8 @@ namespace TaskFlow.Core.Services
             };
         }
 
+        /// <summary>Creates a new account and issues a token for it.</summary>
+        /// <exception cref="InvalidOperationException">The e-mail is already registered.</exception>
         public async Task<AuthResponseDto> RegisterAsync(RegisterDto registerDto)
         {
             if (await _unitOfWork.Users.EmailExistsAsync(registerDto.Email))
@@ -90,7 +110,8 @@ namespace TaskFlow.Core.Services
                 LastName = registerDto.LastName,
                 Email = registerDto.Email,
                 PasswordHash = _passwordHasher.Hash(registerDto.Password),
-                Role = "User"
+                Role = "User",
+                CreatedAt = _timeProvider.GetUtcNow().UtcDateTime
             };
 
             await _unitOfWork.Users.AddAsync(user);

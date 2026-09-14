@@ -64,10 +64,27 @@ public sealed class TaskFlowApiFactory : WebApplicationFactory<Program>
     /// Controllable clock injected into the application.
     /// </summary>
     /// <remarks>
-    /// Starts at a fixed instant so that any behaviour derived from "now" - token
-    /// expiry, created/updated timestamps, overdue calculations - is reproducible.
+    /// <para>
+    /// Frozen: it does not advance unless a test advances it. Any behaviour derived
+    /// from "now" - issued timestamps, token expiry, overdue calculations - therefore
+    /// produces the same value every time it is read within a test.
+    /// </para>
+    /// <para>
+    /// Anchored to the real current time rather than a hardcoded date. The JWT bearer
+    /// middleware validates token lifetime against the system clock, which cannot be
+    /// substituted through <c>TokenValidationParameters</c> here. A clock fixed to a
+    /// past date would issue tokens that the middleware considers already expired, and
+    /// every authenticated test would fail with a 401. Anchoring to now keeps tokens
+    /// valid while still being frozen, so assertions compare against
+    /// <c>Clock.GetUtcNow()</c> rather than against a literal date.
+    /// </para>
+    /// <para>
+    /// The consequence is that token expiry cannot be driven past its limit through
+    /// HTTP. That behaviour is asserted at the unit level instead, where the expiry
+    /// claim is inspected directly.
+    /// </para>
     /// </remarks>
-    public FakeTimeProvider Clock { get; } = new(new DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero));
+    public FakeTimeProvider Clock { get; } = new(DateTimeOffset.UtcNow);
 
     /// <summary>Creates a client that records its traffic and does not follow redirects.</summary>
     /// <remarks>

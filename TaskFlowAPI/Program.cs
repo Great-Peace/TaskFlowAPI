@@ -8,9 +8,11 @@ using TaskFlow.Infrastructure.Repositories;
 using TaskFlow.API.Middleware;
 using TaskFlow.Core.Services.Interface;
 using TaskFlow.Core.Services;
+using TaskFlow.Core.Configuration;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using TaskFlowAPI.Middleware;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -35,23 +37,46 @@ builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddSingleton<IPasswordHasher, Pbkdf2PasswordHasher>();
 
+// System clock. Tests substitute a controllable TimeProvider so that behaviour
+// derived from "now" is deterministic.
+builder.Services.AddSingleton<TimeProvider>(TimeProvider.System);
+
+// Bind and validate JWT settings. ValidateOnStart turns a missing or too-short
+// signing key into a startup failure instead of an error on the first login.
+builder.Services.AddOptions<JwtSettings>()
+    .Bind(builder.Configuration.GetSection(JwtSettings.SectionName))
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+
 // AutoMapper
 builder.Services.AddAutoMapper(typeof(Program));
 
-// JWT Authentication
-var jwtSettings = builder.Configuration.GetSection("JwtSettings");
+// JWT Authentication.
+//
+// The validation parameters are resolved from IOptions<JwtSettings> - the same
+// instance AuthService uses to sign tokens - rather than read from configuration
+// here. Reading configuration directly at this point binds eagerly, during host
+// construction, while AuthService binds lazily on first use. Any configuration
+// source added after startup would then be seen by the signer but not the
+// validator, and every token would fail signature validation. Resolving both from
+// the same options instance makes that class of drift impossible.
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-    .AddJwtBearer(options =>
+    .AddJwtBearer();
+
+builder.Services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme)
+    .Configure<IOptions<JwtSettings>>((options, jwtOptions) =>
     {
+        var jwtSettings = jwtOptions.Value;
+
         options.TokenValidationParameters = new TokenValidationParameters
         {
             ValidateIssuer = true,
             ValidateAudience = true,
             ValidateLifetime = true,
             ValidateIssuerSigningKey = true,
-            ValidIssuer = jwtSettings["Issuer"],
-            ValidAudience = jwtSettings["Audience"],
-            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSettings["SecretKey"]!))
+            ValidIssuer = jwtSettings.Issuer,
+            ValidAudience = jwtSettings.Audience,
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSettings.SecretKey))
         };
     });
 

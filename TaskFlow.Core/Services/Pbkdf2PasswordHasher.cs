@@ -38,14 +38,30 @@ namespace TaskFlow.Core.Services
         }
 
         /// <inheritdoc />
+        /// <remarks>
+        /// A stored hash that cannot be decoded is treated as a non-match rather than
+        /// an error. Throwing here would surface a corrupt or truncated database value
+        /// as an internal server error on login, which both breaks the caller's
+        /// contract and reveals that the account exists.
+        /// </remarks>
         public bool Verify(string password, string hashedPassword)
         {
-            var combined = Convert.FromBase64String(hashedPassword);
+            if (string.IsNullOrEmpty(hashedPassword))
+            {
+                return false;
+            }
+
+            Span<byte> combined = stackalloc byte[SaltSizeInBytes + HashSizeInBytes];
+            if (!Convert.TryFromBase64String(hashedPassword, combined, out var decodedLength)
+                || decodedLength != SaltSizeInBytes + HashSizeInBytes)
+            {
+                return false;
+            }
 
             var salt = new byte[SaltSizeInBytes];
             var hash = new byte[HashSizeInBytes];
-            Array.Copy(combined, 0, salt, 0, SaltSizeInBytes);
-            Array.Copy(combined, SaltSizeInBytes, hash, 0, HashSizeInBytes);
+            combined[..SaltSizeInBytes].CopyTo(salt);
+            combined[SaltSizeInBytes..].CopyTo(hash);
 
             using var pbkdf2 = new Rfc2898DeriveBytes(password, salt, Iterations, Algorithm);
             var candidate = pbkdf2.GetBytes(HashSizeInBytes);
