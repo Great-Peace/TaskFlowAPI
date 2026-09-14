@@ -361,3 +361,6 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+# Build and test output produced by the quality pipeline
+artifacts/
+StrykerOutput/

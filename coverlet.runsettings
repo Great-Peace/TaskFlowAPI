@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!--
+  Coverage collection settings.
+
+  Exclusions are limited to code that is not part of the shipped application.
+  There is exactly one: the test framework in tests/TaskFlow.TestInfrastructure.
+  It is a library rather than a test project, so the collector counts it as
+  production code by default, and including it would measure how well the tests
+  test their own helpers - inflating the figure while saying nothing about the
+  application.
+
+  Nothing else is excluded. In particular, DTOs and entities stay in. They are
+  mostly auto-properties and are cheap to cover, so removing them would raise the
+  headline number without improving anything - which is the sort of adjustment
+  that makes a coverage figure untrustworthy.
+
+  There are no generated files or EF migrations in this repository to exclude.
+-->
+<RunSettings>
+  <DataCollectionRunSettings>
+    <DataCollectors>
+      <DataCollector friendlyName="XPlat code coverage">
+        <Configuration>
+          <Format>cobertura</Format>
+
+          <!-- The test framework library is test code, not application code. -->
+          <Exclude>[TaskFlow.TestInfrastructure]*</Exclude>
+
+          <!--
+            Only code explicitly marked as generated or opted out.
+
+            CompilerGeneratedAttribute is deliberately NOT in this list, although it
+            is a common recommendation. It does exclude auto-property accessors,
+            which contain no logic - but it also excludes the closure classes the
+            compiler emits for lambdas, and this codebase keeps real query logic in
+            lambdas inside the repositories. Excluding them would quietly stop
+            measuring the code most worth measuring, and would raise the headline
+            figure while doing it.
+          -->
+          <ExcludeByAttribute>GeneratedCodeAttribute,ExcludeFromCodeCoverageAttribute</ExcludeByAttribute>
+
+          <SingleHit>false</SingleHit>
+          <UseSourceLink>true</UseSourceLink>
+          <IncludeTestAssembly>false</IncludeTestAssembly>
+        </Configuration>
+      </DataCollector>
+    </DataCollectors>
+  </DataCollectionRunSettings>
+</RunSettings>
