@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Reusable test framework consumed by the test projects.
+    This library contains NO tests of its own - it exists so that individual
+    tests stay short and declarative.
+  -->
+
+  <ItemGroup>
+    <!-- Boots the real ASP.NET Core pipeline in-process. -->
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="8.0.31" />
+
+    <!-- Disposable, real SQL Server instance per test run. -->
+    <PackageReference Include="Testcontainers.MsSql" Version="4.15.0" />
+
+    <!-- Fast, deterministic data reset between tests. -->
+    <PackageReference Include="Respawn" Version="7.0.0" />
+
+    <!-- Controllable clock, so time-dependent behaviour is testable. -->
+    <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" Version="8.10.0" />
+
+    <!-- Fixture interfaces (IAsyncLifetime, ICollectionFixture) are part of the framework surface. -->
+    <PackageReference Include="xunit.extensibility.core" Version="2.9.3" />
+    <PackageReference Include="xunit.assert" Version="2.9.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\TaskFlowAPI\TaskFlowAPI.csproj" />
+    <ProjectReference Include="..\..\TaskFlow.Core\TaskFlow.Core.csproj" />
+    <ProjectReference Include="..\..\TaskFlow.Infrastructure\TaskFlow.Infrastructure.csproj" />
+  </ItemGroup>
+
+</Project>

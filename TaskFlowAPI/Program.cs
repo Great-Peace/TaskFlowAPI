@@ -1,4 +1,4 @@
-using Microsoft.IdentityModel.Tokens;
+﻿using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using System.Text;
 using Serilog;
@@ -33,6 +33,7 @@ builder.Services.AddDbContext<ApplicationDbContext>(options =>
 // Repositories and Services
 builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
 builder.Services.AddScoped<IAuthService, AuthService>();
+builder.Services.AddSingleton<IPasswordHasher, Pbkdf2PasswordHasher>();
 
 // AutoMapper
 builder.Services.AddAutoMapper(typeof(Program));
@@ -146,3 +147,14 @@ if (app.Environment.IsDevelopment())
 }
 
 app.Run();
+
+/// <summary>
+/// Exposes the implicitly generated <c>Program</c> class to test assemblies.
+/// </summary>
+/// <remarks>
+/// Top-level statements generate an <c>internal</c> <c>Program</c> class, which
+/// <c>WebApplicationFactory&lt;TEntryPoint&gt;</c> cannot use as its entry point.
+/// Declaring the partial class here makes it public without altering any runtime
+/// behaviour: no members are added and the generated entry point is unchanged.
+/// </remarks>
+public partial class Program { }

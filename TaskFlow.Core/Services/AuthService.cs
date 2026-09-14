@@ -21,11 +21,13 @@ namespace TaskFlow.Core.Services
     {
         private readonly IUnitOfWork _unitOfWork;
         private readonly IConfiguration _configuration;
+        private readonly IPasswordHasher _passwordHasher;
 
-        public AuthService(IUnitOfWork unitOfWork, IConfiguration configuration)
+        public AuthService(IUnitOfWork unitOfWork, IConfiguration configuration, IPasswordHasher passwordHasher)
         {
             _unitOfWork = unitOfWork;
             _configuration = configuration;
+            _passwordHasher = passwordHasher;
         }
 
         public string GenerateJwtToken(User user)
@@ -57,7 +59,7 @@ namespace TaskFlow.Core.Services
         {
             var user = await _unitOfWork.Users.GetByEmailAsync(loginDto.Email);
 
-            if (user == null || !VerifyPassword (loginDto.Password, user.PasswordHash))
+            if (user == null || !_passwordHasher.Verify(loginDto.Password, user.PasswordHash))
             {
                 throw new UnauthorizedAccessException("Invalid email or password");
             }
@@ -87,7 +89,7 @@ namespace TaskFlow.Core.Services
                 FirstName = registerDto.FirstName,
                 LastName = registerDto.LastName,
                 Email = registerDto.Email,
-                PasswordHash = HashPassword(registerDto.Password),
+                PasswordHash = _passwordHasher.Hash(registerDto.Password),
                 Role = "User"
             };
 
@@ -105,37 +107,6 @@ namespace TaskFlow.Core.Services
                 LastName = user.LastName,
                 Role = user.Role
             };
-        }
-
-        private static string HashPassword(string password)
-        {
-            using var rng = RandomNumberGenerator.Create();
-            var salt = new byte[32];
-            rng.GetBytes(salt);
-
-            using var pbkdf2 = new Rfc2898DeriveBytes(password, salt, 10000, HashAlgorithmName.SHA256);
-            var hash = pbkdf2.GetBytes(32);
-
-            var combined = new byte[64];
-            Array.Copy(salt, 0, combined, 0, 32);
-            Array.Copy(hash, 0, combined, 32, 32);
-
-            return Convert.ToBase64String(combined);
-        }
-
-        private static bool VerifyPassword(string password, string hashedPassword)
-        {
-            var combined = Convert.FromBase64String(hashedPassword);
-            var salt = new byte[32];
-            var hash = new byte[32];
-
-            Array.Copy(combined, 0, salt, 0, 32);
-            Array.Copy(combined, 32, hash, 0, 32);
-
-            using var pbkdf2 = new Rfc2898DeriveBytes(password, salt, 10000, HashAlgorithmName.SHA256);
-            var testHash = pbkdf2.GetBytes(32);
-
-            return CryptographicOperations.FixedTimeEquals(hash, testHash);
         }
     }
 }

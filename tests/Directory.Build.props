@@ -1,0 +1,21 @@
+<Project>
+
+  <!--
+    Shared settings for every project under tests/.
+    Kept separate from the production projects so that adding test tooling
+    never changes how the shipped application is compiled.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+
+    <!-- Test assemblies are not part of the public API surface. -->
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+
+    <!-- Surface analyser problems in test code as errors in CI, as for production code. -->
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+</Project>
