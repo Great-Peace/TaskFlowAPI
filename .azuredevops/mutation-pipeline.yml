@@ -1,0 +1,103 @@
+# TaskFlow API - scheduled mutation testing
+#
+# Separate from the pull-request pipeline, on purpose.
+#
+# Mutation testing re-runs the unit suite once per mutant. Measured on this
+# repository it takes roughly 11 minutes against TaskFlow.Core alone, against a
+# unit suite that finishes in under a second. Putting that in the PR path would
+# multiply feedback time by an order of magnitude to answer a question that does
+# not change between commits: "are these tests capable of detecting a wrong
+# answer?" That is a property of the test suite, not of a particular change.
+#
+# It therefore runs nightly and on demand. A drop in the score is worth
+# investigating within a day; it is not worth blocking a pull request on.
+#
+# The score does not fail the build (thresholds.break is 0 in
+# stryker-config.json). A mutation score used as a gate is optimised, and tests
+# written to kill mutants rather than to describe behaviour are worse than the
+# ones they replace. The report is a diagnostic to read, not a target to hit.
+
+trigger: none
+pr: none
+
+schedules:
+  - cron: '0 2 * * *'
+    displayName: 'Nightly at 02:00 UTC'
+    branches:
+      include:
+        - master
+        - main
+    # Run even when nothing changed: the score can move because a dependency
+    # changed behaviour, not only because the code did.
+    always: true
+
+variables:
+  buildConfiguration: 'Release'
+  dotnetVersion: '8.0.x'
+  DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+  DOTNET_NOLOGO: 'true'
+
+jobs:
+  - job: MutationTesting
+    displayName: 'Mutation testing (TaskFlow.Core)'
+    pool:
+      vmImage: 'ubuntu-latest'
+    timeoutInMinutes: 60
+    steps:
+      - task: UseDotNet@2
+        displayName: 'Install .NET SDK'
+        inputs:
+          packageType: 'sdk'
+          version: $(dotnetVersion)
+
+      - script: dotnet restore TaskFlowAPI.sln
+        displayName: 'Restore'
+
+      - script: dotnet build TaskFlowAPI.sln --configuration $(buildConfiguration) --no-restore
+        displayName: 'Build'
+
+      # Pinned to 4.16.0: version 5 requires a newer SDK than the one this
+      # solution targets.
+      - script: dotnet tool install -g dotnet-stryker --version 4.16.0
+        displayName: 'Install Stryker.NET'
+
+      - script: |
+          export PATH="$PATH:$HOME/.dotnet/tools"
+          dotnet-stryker --config-file stryker-config.json --additional-timeout 30000
+        displayName: 'Run mutation analysis'
+
+      # The HTML report is the deliverable. It shows each surviving mutant next to
+      # the source it changed, which is what makes a survivor actionable rather
+      # than just a number.
+      - publish: $(Build.SourcesDirectory)/StrykerOutput
+        artifact: 'mutation-report'
+        displayName: 'Publish mutation report'
+        condition: succeededOrFailed()
+
+      - script: |
+          REPORT=$(find StrykerOutput -name 'mutation-report.json' | sort | tail -1)
+          echo "Mutation report: $REPORT"
+          python3 - "$REPORT" <<'PYTHON'
+          import json, sys, os
+          from collections import Counter
+          with open(sys.argv[1], encoding='utf-8') as handle:
+              data = json.load(handle)
+          counts = Counter()
+          survivors = []
+          for path, info in data.get('files', {}).items():
+              for mutant in info.get('mutants', []):
+                  counts[mutant['status']] += 1
+                  if mutant['status'] in ('Survived', 'NoCoverage'):
+                      line = mutant.get('location', {}).get('start', {}).get('line')
+                      survivors.append(f"{os.path.basename(path)}:{line} {mutant.get('mutatorName')}")
+          detected = counts['Killed'] + counts['Timeout']
+          scored = detected + counts['Survived'] + counts['NoCoverage']
+          print(f"counts: {dict(counts)}")
+          if scored:
+              print(f"mutation score: {100 * detected / scored:.1f}% ({detected}/{scored})")
+          print(f"survivors: {len(survivors)}")
+          for survivor in survivors:
+              print(f"  {survivor}")
+          PYTHON
+        displayName: 'Summarise score and survivors'
+        condition: succeededOrFailed()

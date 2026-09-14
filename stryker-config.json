@@ -1,0 +1,23 @@
+{
+  "stryker-config": {
+    "project": "TaskFlow.Core.csproj",
+    "test-projects": [
+      "tests/TaskFlow.UnitTests/TaskFlow.UnitTests.csproj"
+    ],
+    "mutate": [
+      "Services/**/*.cs",
+      "Configuration/**/*.cs"
+    ],
+    "reporters": [
+      "html",
+      "json",
+      "progress"
+    ],
+    "thresholds": {
+      "high": 85,
+      "low": 70,
+      "break": 0
+    },
+    "concurrency": 4
+  }
+}

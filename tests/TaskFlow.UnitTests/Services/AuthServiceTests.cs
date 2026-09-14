@@ -34,6 +34,17 @@ public class AuthServiceTests
 
     private const string SigningKey = "unit-test-signing-key-at-least-32-characters-long";
 
+    /// <summary>
+    /// The message a rejected login must produce.
+    /// </summary>
+    /// <remarks>
+    /// Pinned because mutation testing found that emptying this message killed no
+    /// test: the suite asserted the exception type, and that both failure paths
+    /// produced the same message, but never that the message said anything at all.
+    /// A blank rejection reason would have shipped unnoticed.
+    /// </remarks>
+    private const string ExpectedRejectionMessage = "Invalid email or password";
+
     private readonly Mock<IUserRepository> _users = new(MockBehavior.Strict);
     private readonly Mock<IUnitOfWork> _unitOfWork = new(MockBehavior.Strict);
     private readonly FakeTimeProvider _clock = new(Now);
@@ -91,12 +102,14 @@ public class AuthServiceTests
     {
         _users.Setup(r => r.GetByEmailAsync("nobody@taskflow.test")).ReturnsAsync((User?)null);
 
-        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+        var exception = await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
             CreateService().LoginAsync(new LoginDto
             {
                 Email = "nobody@taskflow.test",
                 Password = "Passw0rd!"
             }));
+
+        Assert.Equal(ExpectedRejectionMessage, exception.Message);
     }
 
     [Fact]
@@ -105,12 +118,14 @@ public class AuthServiceTests
         var user = ExistingUser();
         _users.Setup(r => r.GetByEmailAsync(user.Email)).ReturnsAsync(user);
 
-        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+        var exception = await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
             CreateService().LoginAsync(new LoginDto
             {
                 Email = user.Email,
                 Password = "not the right password"
             }));
+
+        Assert.Equal(ExpectedRejectionMessage, exception.Message);
     }
 
     /// <summary>
@@ -137,6 +152,7 @@ public class AuthServiceTests
             service.LoginAsync(new LoginDto { Email = "nobody@taskflow.test", Password = "wrong" }));
 
         Assert.Equal(wrongPassword.Message, unknownAccount.Message);
+        Assert.Equal(ExpectedRejectionMessage, wrongPassword.Message);
     }
 
     [Fact]

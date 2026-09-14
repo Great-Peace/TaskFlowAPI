@@ -1,0 +1,233 @@
+name: CI
+
+# Mirrors azure-pipelines.yml. The repository is hosted on GitHub, so this is the
+# pipeline that actually executes and produces measured evidence; the Azure
+# DevOps definition is the equivalent for an Azure DevOps project.
+#
+# Jobs are split the same way and for the same reason: a failure should name what
+# broke. Everything that runs without Docker goes first, so a formatting slip or a
+# failing unit test reports in about a minute rather than queueing behind a SQL
+# Server container.
+
+on:
+  push:
+    branches: [master, main, quality-engineering]
+  pull_request:
+    branches: [master, main]
+  workflow_dispatch:
+
+env:
+  DOTNET_VERSION: '8.0.x'
+  BUILD_CONFIGURATION: Release
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+  DOTNET_NOLOGO: 'true'
+
+jobs:
+  validate:
+    name: Build, format, unit and architecture tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          # Any dependency change invalidates the cache; nothing else does.
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      - name: Restore
+        run: dotnet restore TaskFlowAPI.sln
+
+      - name: Build
+        run: dotnet build TaskFlowAPI.sln --configuration $BUILD_CONFIGURATION --no-restore
+
+      # Reports known-vulnerable packages without failing the build.
+      #
+      # There is one at present: AutoMapper 14.0.0, GHSA-rvv3-g6hj-g44x. It is
+      # analysed and accepted in docs/DEPENDENCY_DECISIONS.md - the attack needs a
+      # deeply nested attacker-supplied object graph, and every inbound DTO in this
+      # API is flat, so it is not reachable here. The patched version is behind a
+      # licence change and breaking API changes.
+      #
+      # It reports rather than fails on purpose. A gate that must be bypassed on
+      # every build gets suppressed, and the suppression then hides the next
+      # advisory too - including one that is reachable. This stays loud instead:
+      # it prints to the log and to the job summary on every run.
+      - name: Audit dependencies for known vulnerabilities
+        continue-on-error: true
+        run: |
+          echo "### Dependency vulnerability audit" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          dotnet list TaskFlowAPI.sln package --vulnerable --include-transitive 2>&1 | tee audit.txt
+          cat audit.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          if grep -q "has the following vulnerable packages" audit.txt; then
+            echo "Known vulnerable packages found. See docs/DEPENDENCY_DECISIONS.md for the accepted ones."
+            echo "_See docs/DEPENDENCY_DECISIONS.md for accepted advisories._" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # Before the tests: a formatting failure is instant, so there is no reason to
+      # spend test time before reporting it.
+      - name: Verify formatting
+        run: dotnet format TaskFlowAPI.sln --verify-no-changes --no-restore
+
+      - name: Unit tests
+        run: |
+          dotnet test tests/TaskFlow.UnitTests/TaskFlow.UnitTests.csproj \
+            --configuration $BUILD_CONFIGURATION --no-build \
+            --logger "trx;LogFileName=unit-tests.trx" \
+            --results-directory artifacts/test-results \
+            --settings coverlet.runsettings \
+            --collect:"XPlat Code Coverage"
+
+      - name: Architecture rules
+        run: |
+          dotnet test tests/TaskFlow.ArchitectureTests/TaskFlow.ArchitectureTests.csproj \
+            --configuration $BUILD_CONFIGURATION --no-build \
+            --logger "trx;LogFileName=architecture-tests.trx" \
+            --results-directory artifacts/test-results
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validate-test-results
+          path: artifacts/test-results
+          retention-days: 7
+
+  integration:
+    name: Integration, contract and end-to-end
+    runs-on: ubuntu-latest
+    needs: validate
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      - name: Restore
+        run: dotnet restore TaskFlowAPI.sln
+
+      - name: Build
+        run: dotnet build TaskFlowAPI.sln --configuration $BUILD_CONFIGURATION --no-restore
+
+      # A separate step so that "the database image could not be fetched" is
+      # distinguishable from "the tests failed".
+      - name: Pre-pull SQL Server image
+        run: docker pull mcr.microsoft.com/mssql/server:2022-latest
+
+      - name: Integration, contract and end-to-end tests
+        run: |
+          dotnet test tests/TaskFlow.IntegrationTests/TaskFlow.IntegrationTests.csproj \
+            --configuration $BUILD_CONFIGURATION --no-build \
+            --logger "trx;LogFileName=integration-tests.trx" \
+            --logger "console;verbosity=normal" \
+            --results-directory artifacts/test-results \
+            --settings coverlet.runsettings \
+            --collect:"XPlat Code Coverage"
+
+      # Testcontainers' Ryuk sidecar removes containers when the test process
+      # exits, including after a crash. This is a sweep for the case where the
+      # runner killed the process outright. It must never fail the job: it is
+      # cleanup, not a check.
+      - name: Ensure test containers are removed
+        if: always()
+        continue-on-error: true
+        run: |
+          echo "Containers left behind by this run:"
+          docker ps -a --filter "ancestor=mcr.microsoft.com/mssql/server:2022-latest" --format '{{.ID}} {{.Status}}'
+          docker ps -aq --filter "ancestor=mcr.microsoft.com/mssql/server:2022-latest" | xargs -r docker rm -f
+          echo "Cleanup complete."
+
+      - name: Merge coverage report
+        if: always()
+        run: |
+          dotnet tool install -g dotnet-reportgenerator-globaltool || true
+          export PATH="$PATH:$HOME/.dotnet/tools"
+          reportgenerator \
+            -reports:"artifacts/test-results/**/coverage.cobertura.xml" \
+            -targetdir:"artifacts/coverage" \
+            -reporttypes:"Cobertura;Html;TextSummary;MarkdownSummaryGithub"
+
+      - name: Coverage summary
+        if: always()
+        run: |
+          cat artifacts/coverage/Summary.txt
+          if [ -f artifacts/coverage/SummaryGithub.md ]; then
+            cat artifacts/coverage/SummaryGithub.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload results and coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-test-results
+          path: |
+            artifacts/test-results
+            artifacts/coverage
+          retention-days: 7
+
+  container:
+    name: Docker image and smoke check
+    runs-on: ubuntu-latest
+    needs: integration
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -f TaskFlowAPI/Dockerfile -t taskflowapi:ci .
+
+      # Building the image is not evidence that it runs. This requires the
+      # container to serve HTTP, which catches a missing runtime dependency or a
+      # broken entry point - failures a build cannot see.
+      - name: Container smoke check
+        run: |
+          set -e
+          docker run -d --name taskflow-smoke -p 8080:8080 \
+            -e ASPNETCORE_ENVIRONMENT=Production \
+            -e ASPNETCORE_HTTP_PORTS=8080 \
+            -e ConnectionStrings__DefaultConnection="Server=localhost;Database=Unused;User Id=sa;Password=NotUsed;TrustServerCertificate=true" \
+            taskflowapi:ci
+
+          echo "Waiting for the application to accept connections..."
+          for attempt in $(seq 1 30); do
+            # Any HTTP status proves the server is listening and routing. A 401
+            # from a protected route is a good sign of life; this check
+            # deliberately does not require a working database.
+            code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/api/projects || echo "000")
+            if [ "$code" != "000" ]; then
+              echo "Application responded with HTTP $code after ${attempt}s."
+              exit 0
+            fi
+            sleep 1
+          done
+
+          echo "The application never responded. Container logs:"
+          docker logs taskflow-smoke
+          exit 1
+
+      - name: Capture logs and remove the container
+        if: always()
+        continue-on-error: true
+        run: |
+          echo "--- container logs ---"
+          docker logs taskflow-smoke || true
+          docker rm -f taskflow-smoke || true

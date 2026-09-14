@@ -1,0 +1,276 @@
+# TaskFlow API - quality pipeline
+#
+# Structured as several small stages rather than one long script, so a failure
+# names the thing that failed. "Unit tests failed" and "the contract check failed"
+# call for different responses; a single monolithic job reports both as "build
+# failed" and leaves the developer reading logs to find out which.
+#
+# Stages are ordered by cost. Everything that can fail without Docker runs first,
+# so a formatting slip or a broken unit test reports in about a minute instead of
+# waiting behind a SQL Server container pull.
+#
+#   Validate    restore, build, format check, unit tests, architecture rules
+#   Integration API tests, contract check, end-to-end workflow, coverage
+#   Container   Docker image build and a smoke check against the running image
+#
+# Mutation testing is deliberately not here - see the scheduled pipeline in
+# .azuredevops/mutation-pipeline.yml and the reasoning in docs/TESTING_STRATEGY.md.
+
+trigger:
+  branches:
+    include:
+      - master
+      - main
+
+pr:
+  branches:
+    include:
+      - master
+      - main
+
+variables:
+  buildConfiguration: 'Release'
+  dotnetVersion: '8.0.x'
+  # Keeping the NuGet cache inside the workspace is what makes it cacheable.
+  NUGET_PACKAGES: $(Pipeline.Workspace)/.nuget/packages
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+  DOTNET_NOLOGO: 'true'
+
+stages:
+  # ---------------------------------------------------------------- validate
+  - stage: Validate
+    displayName: 'Validate (no Docker required)'
+    jobs:
+      - job: Validate
+        displayName: 'Build, format, unit and architecture tests'
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          - task: UseDotNet@2
+            displayName: 'Install .NET SDK'
+            inputs:
+              packageType: 'sdk'
+              version: $(dotnetVersion)
+
+          - task: Cache@2
+            displayName: 'Restore NuGet cache'
+            inputs:
+              # Keyed on the lock-free project files: any dependency change
+              # invalidates the cache, nothing else does.
+              key: 'nuget | "$(Agent.OS)" | **/*.csproj'
+              restoreKeys: |
+                nuget | "$(Agent.OS)"
+              path: $(NUGET_PACKAGES)
+
+          - script: dotnet restore TaskFlowAPI.sln
+            displayName: 'Restore'
+
+          - script: dotnet build TaskFlowAPI.sln --configuration $(buildConfiguration) --no-restore
+            displayName: 'Build'
+
+          # Reports known-vulnerable packages without failing the build.
+          #
+          # One is present: AutoMapper 14.0.0, GHSA-rvv3-g6hj-g44x, analysed and
+          # accepted in docs/DEPENDENCY_DECISIONS.md. The attack needs a deeply
+          # nested attacker-supplied object graph; every inbound DTO here is flat,
+          # so it is not reachable. The patched version is behind a licence change
+          # and breaking API changes.
+          #
+          # It reports rather than fails on purpose: a gate that must be bypassed
+          # on every build gets suppressed, and the suppression then hides the next
+          # advisory too.
+          - script: |
+              dotnet list TaskFlowAPI.sln package --vulnerable --include-transitive | tee audit.txt
+              if grep -q "has the following vulnerable packages" audit.txt; then
+                echo "##vso[task.logissue type=warning]Known vulnerable packages found - see docs/DEPENDENCY_DECISIONS.md"
+              fi
+            displayName: 'Audit dependencies for known vulnerabilities'
+            continueOnError: true
+
+          # Runs before the tests: a formatting failure is instant and there is no
+          # point spending test time to report it afterwards.
+          - script: dotnet format TaskFlowAPI.sln --verify-no-changes --no-restore --verbosity diagnostic
+            displayName: 'Verify formatting'
+
+          - script: |
+              dotnet test tests/TaskFlow.UnitTests/TaskFlow.UnitTests.csproj \
+                --configuration $(buildConfiguration) \
+                --no-build \
+                --logger "trx;LogFileName=unit-tests.trx" \
+                --results-directory $(Agent.TempDirectory)/test-results \
+                --settings coverlet.runsettings \
+                --collect:"XPlat Code Coverage"
+            displayName: 'Unit tests'
+
+          - script: |
+              dotnet test tests/TaskFlow.ArchitectureTests/TaskFlow.ArchitectureTests.csproj \
+                --configuration $(buildConfiguration) \
+                --no-build \
+                --logger "trx;LogFileName=architecture-tests.trx" \
+                --results-directory $(Agent.TempDirectory)/test-results
+            displayName: 'Architecture rules'
+
+          - task: PublishTestResults@2
+            displayName: 'Publish unit and architecture results'
+            # Publish results even when the tests failed - that is exactly when
+            # they are needed.
+            condition: succeededOrFailed()
+            inputs:
+              testResultsFormat: 'VSTest'
+              testResultsFiles: '$(Agent.TempDirectory)/test-results/*.trx'
+              mergeTestResults: true
+              failTaskOnFailedTests: true
+              testRunTitle: 'Unit and architecture tests'
+
+          - publish: $(Agent.TempDirectory)/test-results
+            artifact: 'validate-test-results'
+            displayName: 'Publish result files as an artifact'
+            condition: succeededOrFailed()
+
+  # ------------------------------------------------------------- integration
+  - stage: Integration
+    displayName: 'Integration, contract and end-to-end'
+    dependsOn: Validate
+    condition: succeeded()
+    jobs:
+      - job: Integration
+        displayName: 'API tests against a real SQL Server'
+        pool:
+          vmImage: 'ubuntu-latest'
+        # SQL Server needs time to start inside the container on a hosted agent.
+        timeoutInMinutes: 30
+        steps:
+          - task: UseDotNet@2
+            displayName: 'Install .NET SDK'
+            inputs:
+              packageType: 'sdk'
+              version: $(dotnetVersion)
+
+          - task: Cache@2
+            displayName: 'Restore NuGet cache'
+            inputs:
+              key: 'nuget | "$(Agent.OS)" | **/*.csproj'
+              restoreKeys: |
+                nuget | "$(Agent.OS)"
+              path: $(NUGET_PACKAGES)
+
+          - script: dotnet restore TaskFlowAPI.sln
+            displayName: 'Restore'
+
+          - script: dotnet build TaskFlowAPI.sln --configuration $(buildConfiguration) --no-restore
+            displayName: 'Build'
+
+          # Pulling the image as an explicit step separates "the database image
+          # could not be fetched" from "the tests failed", which are different
+          # problems with different fixes.
+          - script: docker pull mcr.microsoft.com/mssql/server:2022-latest
+            displayName: 'Pre-pull SQL Server image'
+
+          - script: |
+              dotnet test tests/TaskFlow.IntegrationTests/TaskFlow.IntegrationTests.csproj \
+                --configuration $(buildConfiguration) \
+                --no-build \
+                --logger "trx;LogFileName=integration-tests.trx" \
+                --logger "console;verbosity=normal" \
+                --results-directory $(Agent.TempDirectory)/test-results \
+                --settings coverlet.runsettings \
+                --collect:"XPlat Code Coverage"
+            displayName: 'Integration, contract and end-to-end tests'
+
+          # Testcontainers' Ryuk sidecar removes containers when the test process
+          # exits, including after a crash. This is a belt-and-braces sweep for the
+          # case where the agent killed the process outright, and it must not fail
+          # the build - it is cleanup, not a check.
+          - script: |
+              echo "Containers left behind by this run:"
+              docker ps -a --filter "ancestor=mcr.microsoft.com/mssql/server:2022-latest" --format '{{.ID}} {{.Status}}'
+              docker ps -aq --filter "ancestor=mcr.microsoft.com/mssql/server:2022-latest" | xargs -r docker rm -f
+              echo "Cleanup complete."
+            displayName: 'Ensure test containers are removed'
+            condition: always()
+            continueOnError: true
+
+          - task: PublishTestResults@2
+            displayName: 'Publish integration results'
+            condition: succeededOrFailed()
+            inputs:
+              testResultsFormat: 'VSTest'
+              testResultsFiles: '$(Agent.TempDirectory)/test-results/*.trx'
+              mergeTestResults: true
+              failTaskOnFailedTests: true
+              testRunTitle: 'Integration, contract and end-to-end tests'
+
+          - script: |
+              dotnet tool install -g dotnet-reportgenerator-globaltool || true
+              export PATH="$PATH:$HOME/.dotnet/tools"
+              reportgenerator \
+                -reports:"$(Agent.TempDirectory)/test-results/**/coverage.cobertura.xml" \
+                -targetdir:"$(Agent.TempDirectory)/coverage" \
+                -reporttypes:"Cobertura;HtmlInline_AzurePipelines;TextSummary"
+              cat "$(Agent.TempDirectory)/coverage/Summary.txt"
+            displayName: 'Merge coverage report'
+            condition: succeededOrFailed()
+
+          - task: PublishCodeCoverageResults@2
+            displayName: 'Publish coverage'
+            condition: succeededOrFailed()
+            inputs:
+              summaryFileLocation: '$(Agent.TempDirectory)/coverage/Cobertura.xml'
+              pathToSources: '$(Build.SourcesDirectory)'
+
+          - publish: $(Agent.TempDirectory)/test-results
+            artifact: 'integration-test-results'
+            displayName: 'Publish result files as an artifact'
+            condition: succeededOrFailed()
+
+  # --------------------------------------------------------------- container
+  - stage: Container
+    displayName: 'Docker image and smoke check'
+    dependsOn: Integration
+    condition: succeeded()
+    jobs:
+      - job: Container
+        displayName: 'Build the image and prove it starts'
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          - script: docker build -f TaskFlowAPI/Dockerfile -t taskflowapi:$(Build.BuildId) .
+            displayName: 'Build image'
+
+          # The image building is not evidence that it runs. This starts the
+          # container and requires it to serve HTTP, which catches a missing
+          # runtime dependency or a broken entry point - failures a build cannot see.
+          - script: |
+              set -e
+              docker run -d --name taskflow-smoke -p 8080:8080 \
+                -e ASPNETCORE_ENVIRONMENT=Production \
+                -e ASPNETCORE_HTTP_PORTS=8080 \
+                -e ConnectionStrings__DefaultConnection="Server=localhost;Database=Unused;Trusted_Connection=false;User Id=sa;Password=NotUsed;TrustServerCertificate=true" \
+                taskflowapi:$(Build.BuildId)
+
+              echo "Waiting for the application to accept connections..."
+              for attempt in $(seq 1 30); do
+                # Any HTTP status proves the server is listening and routing.
+                # A 401 from a protected route is a perfectly good sign of life;
+                # the smoke check deliberately does not require a database.
+                code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/api/projects || echo "000")
+                if [ "$code" != "000" ]; then
+                  echo "Application responded with HTTP $code after ${attempt}s."
+                  exit 0
+                fi
+                sleep 1
+              done
+
+              echo "The application never responded. Container logs:"
+              docker logs taskflow-smoke
+              exit 1
+            displayName: 'Container smoke check'
+
+          - script: |
+              echo "--- container logs ---"
+              docker logs taskflow-smoke || true
+              docker rm -f taskflow-smoke || true
+            displayName: 'Capture logs and remove the container'
+            condition: always()
+            continueOnError: true
