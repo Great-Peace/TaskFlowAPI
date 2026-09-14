@@ -1,4 +1,4 @@
-﻿namespace TaskFlowAPI.Middleware
+namespace TaskFlowAPI.Middleware
 {
     public class RequestLoggingMiddleware
     {

@@ -1,18 +1,18 @@
-﻿using Microsoft.IdentityModel.Tokens;
-using Microsoft.OpenApi.Models;
 using System.Text;
-using Serilog;
-using TaskFlow.Infrastructure.Data;
-using TaskFlow.Core.Interfaces;
-using TaskFlow.Infrastructure.Repositories;
-using TaskFlow.API.Middleware;
-using TaskFlow.Core.Services.Interface;
-using TaskFlow.Core.Services;
-using TaskFlow.Core.Configuration;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
-using TaskFlowAPI.Middleware;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using Microsoft.IdentityModel.Tokens;
+using Microsoft.OpenApi.Models;
+using Serilog;
+using TaskFlow.API.Middleware;
+using TaskFlow.Core.Configuration;
+using TaskFlow.Core.Interfaces;
+using TaskFlow.Core.Services;
+using TaskFlow.Core.Services.Interface;
+using TaskFlow.Infrastructure.Data;
+using TaskFlow.Infrastructure.Repositories;
+using TaskFlowAPI.Middleware;
 
 var builder = WebApplication.CreateBuilder(args);
 

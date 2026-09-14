@@ -1,0 +1,47 @@
+# EditorConfig for TaskFlowAPI
+#
+# Deliberately minimal. It fixes the things that cause noisy diffs and
+# cross-platform friction - encoding, line endings, indentation, trailing
+# whitespace - and stops short of imposing a house style on code that already
+# reads consistently.
+#
+# `dotnet format --verify-no-changes` enforces this in CI. Keeping the rule set
+# small is what makes that gate cheap to satisfy and honest to enforce: a rule
+# nobody agreed to is a rule that gets suppressed.
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = crlf
+indent_style = space
+indent_size = 4
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.{json,yml,yaml}]
+indent_size = 2
+
+[*.{csproj,props,targets}]
+indent_size = 2
+
+[*.md]
+# Trailing spaces are significant in Markdown (hard line break).
+trim_trailing_whitespace = false
+
+[*.cs]
+# Use C# defaults for brace and spacing style; the existing code already follows
+# them, so this records the convention rather than changing anything.
+csharp_new_line_before_open_brace = all
+csharp_new_line_before_else = true
+csharp_new_line_before_catch = true
+csharp_new_line_before_finally = true
+
+dotnet_sort_system_directives_first = true
+dotnet_separate_import_directive_groups = false
+
+# Missing XML comments on public members. The API project generates a
+# documentation file for Swagger, so this surfaces as a warning there. It is not
+# promoted to an error: undocumented members are worth knowing about but should
+# not stop a build.
+dotnet_diagnostic.CS1591.severity = warning
