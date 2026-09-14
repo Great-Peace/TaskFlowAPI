@@ -107,6 +107,61 @@ public class ProjectsEndpointTests : IntegrationTestBase
         Assert.Equal(alice.Id, project.CreatedById);
     }
 
+    /// <summary>
+    /// A created project records when it was created.
+    /// </summary>
+    /// <remarks>
+    /// The mapping ignores CreatedAt and the controller previously never set it, so
+    /// every project persisted 0001-01-01. That also made
+    /// <c>GetUserProjectsAsync</c>'s "newest first" ordering meaningless, because
+    /// every row held the same value. The timestamp now comes from the injected clock.
+    /// </remarks>
+    [Fact]
+    public async Task A_created_project_records_when_it_was_created()
+    {
+        var client = await ClientForAsync(TestUsers.Alice);
+
+        await client.PostAsJsonAsync("/api/projects", new CreateProjectDto { Name = "Apollo" });
+
+        var stored = await QueryAsync(db => db.Projects.SingleAsync());
+
+        Assert.NotEqual(default, stored.CreatedAt);
+        Assert.Equal(Api.Clock.GetUtcNow().UtcDateTime, stored.CreatedAt);
+        Assert.Null(stored.UpdatedAt);
+    }
+
+    /// <summary>
+    /// Creating and then fetching a project must describe it identically.
+    /// </summary>
+    /// <remarks>
+    /// The create path previously mapped the entity before its owner navigation was
+    /// loaded, so POST returned <c>createdByName: null</c> while GET returned the
+    /// owner's name for the very same resource.
+    /// </remarks>
+    [Fact]
+    public async Task Create_and_retrieve_return_the_same_representation()
+    {
+        var client = await ClientForAsync(TestUsers.Alice);
+
+        var createResponse = await client.PostAsJsonAsync("/api/projects",
+            new CreateProjectDto { Name = "Apollo", Description = "Moon landing" });
+        var created = await ApiAssert.StatusAndContentAsync<ProjectDto>(
+            createResponse, HttpStatusCode.Created, Diagnostics());
+
+        var getResponse = await client.GetAsync($"/api/projects/{created.Id}");
+        var fetched = await ApiAssert.StatusAndContentAsync<ProjectDto>(
+            getResponse, HttpStatusCode.OK, Diagnostics());
+
+        Assert.Equal(TestUsers.Alice.FullName, created.CreatedByName);
+        Assert.Equal(fetched.CreatedByName, created.CreatedByName);
+        Assert.Equal(fetched.Id, created.Id);
+        Assert.Equal(fetched.Name, created.Name);
+        Assert.Equal(fetched.Description, created.Description);
+        Assert.Equal(fetched.Status, created.Status);
+        Assert.Equal(fetched.CreatedById, created.CreatedById);
+        Assert.Equal(fetched.CreatedAt, created.CreatedAt);
+    }
+
     [Fact]
     public async Task The_location_header_of_a_created_project_resolves()
     {

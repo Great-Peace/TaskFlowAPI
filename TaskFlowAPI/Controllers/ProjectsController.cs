@@ -1,4 +1,4 @@
-﻿using AutoMapper;
+using AutoMapper;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using System.Security.Claims;
@@ -8,6 +8,16 @@ using TaskFlow.Core.Interfaces;
 
 namespace TaskFlow.API.Controllers
 {
+    /// <summary>
+    /// Project management endpoints.
+    /// </summary>
+    /// <remarks>
+    /// Projects are private to the user who created them. Every route that addresses a
+    /// project by id verifies ownership and answers 404 when the caller is not the
+    /// owner, so that "not yours" and "does not exist" are indistinguishable. Returning
+    /// 403 instead would confirm the project exists and allow a caller to enumerate
+    /// other users' data by probing ids.
+    /// </remarks>
     [ApiController]
     [Route("api/[controller]")]
     [Authorize]
@@ -17,12 +27,19 @@ namespace TaskFlow.API.Controllers
         private readonly IUnitOfWork _unitOfWork;
         private readonly IMapper _mapper;
         private readonly ILogger<ProjectsController> _logger;
+        private readonly TimeProvider _timeProvider;
 
-        public ProjectsController(IUnitOfWork unitOfWork, IMapper mapper, ILogger<ProjectsController> logger)
+        /// <summary>Creates the controller.</summary>
+        public ProjectsController(
+            IUnitOfWork unitOfWork,
+            IMapper mapper,
+            ILogger<ProjectsController> logger,
+            TimeProvider timeProvider)
         {
             _unitOfWork = unitOfWork;
             _mapper = mapper;
             _logger = logger;
+            _timeProvider = timeProvider;
         }
 
         /// <summary>
@@ -41,27 +58,40 @@ namespace TaskFlow.API.Controllers
         }
 
         /// <summary>
+        /// Get every project in the system. Administrators only.
+        /// </summary>
+        /// <returns>All projects, across all users</returns>
+        /// <remarks>
+        /// Answers 403 rather than 404 for an authenticated non-administrator. Unlike
+        /// an individual project, the existence of this endpoint is not confidential -
+        /// it is part of the published contract - so concealing it would reveal nothing
+        /// while making a permissions problem look like a routing error.
+        /// </remarks>
+        [HttpGet("all")]
+        [Authorize(Roles = "Admin")]
+        [ProducesResponseType(typeof(IEnumerable<ProjectDto>), 200)]
+        [ProducesResponseType(403)]
+        public async Task<ActionResult<IEnumerable<ProjectDto>>> GetAllProjects()
+        {
+            var projects = await _unitOfWork.Projects.GetAllAsync();
+            return Ok(_mapper.Map<IEnumerable<ProjectDto>>(projects));
+        }
+
+        /// <summary>
         /// Get a specific project by ID
         /// </summary>
         /// <param name="id">Project ID</param>
         /// <returns>Project details</returns>
-        [HttpGet("{id}")]
+        [HttpGet("{id:int}")]
         [ProducesResponseType(typeof(ProjectDto), 200)]
         [ProducesResponseType(typeof(ErrorResponseDto), 404)]
         public async Task<ActionResult<ProjectDto>> GetProject(int id)
         {
             var project = await _unitOfWork.Projects.GetWithTasksAsync(id);
 
-            // A project is visible only to the user who created it. Without this check
-            // any authenticated caller could read any project simply by guessing its id.
-            //
-            // The response is 404 rather than 403: a 403 would confirm that a project
-            // with this id exists, which lets a caller enumerate other users' data by
-            // probing ids. Returning the same 404 for "not yours" and "not there"
-            // reveals nothing either way.
             if (project == null || project.CreatedById != GetCurrentUserId())
             {
-                return NotFound(new ErrorResponseDto { Message = "Project not found" });
+                return ProjectNotFound();
             }
 
             var projectDto = _mapper.Map<ProjectDto>(project);
@@ -82,16 +112,91 @@ namespace TaskFlow.API.Controllers
 
             var project = _mapper.Map<Project>(createProjectDto);
             project.CreatedById = userId;
+            project.CreatedAt = _timeProvider.GetUtcNow().UtcDateTime;
 
             await _unitOfWork.Projects.AddAsync(project);
             await _unitOfWork.SaveChangesAsync();
 
-            var projectDto = _mapper.Map<ProjectDto>(project);
-
             _logger.LogInformation("Project {ProjectId} created by user {UserId}", project.Id, userId);
+
+            // Re-read so the owner navigation is populated. Mapping the just-inserted
+            // entity directly would leave CreatedByName null here while the same
+            // project returned CreatedByName from GET, giving the two routes different
+            // representations of one resource.
+            var created = await _unitOfWork.Projects.GetByIdAsync(project.Id);
+            var projectDto = _mapper.Map<ProjectDto>(created);
 
             return CreatedAtAction(nameof(GetProject), new { id = project.Id }, projectDto);
         }
+
+        /// <summary>
+        /// Update an existing project
+        /// </summary>
+        /// <param name="id">Project ID</param>
+        /// <param name="updateProjectDto">Fields to change; omitted fields are left as they are</param>
+        /// <returns>The updated project</returns>
+        [HttpPut("{id:int}")]
+        [ProducesResponseType(typeof(ProjectDto), 200)]
+        [ProducesResponseType(typeof(ErrorResponseDto), 400)]
+        [ProducesResponseType(typeof(ErrorResponseDto), 404)]
+        public async Task<ActionResult<ProjectDto>> UpdateProject(
+            int id,
+            [FromBody] UpdateProjectDto updateProjectDto)
+        {
+            var userId = GetCurrentUserId();
+            var project = await _unitOfWork.Projects.GetByIdAsync(id);
+
+            if (project == null || project.CreatedById != userId)
+            {
+                return ProjectNotFound();
+            }
+
+            // Patch semantics: the mapping applies only the members the client supplied.
+            _mapper.Map(updateProjectDto, project);
+            project.UpdatedAt = _timeProvider.GetUtcNow().UtcDateTime;
+
+            await _unitOfWork.Projects.UpdateAsync(project);
+            await _unitOfWork.SaveChangesAsync();
+
+            _logger.LogInformation("Project {ProjectId} updated by user {UserId}", id, userId);
+
+            return Ok(_mapper.Map<ProjectDto>(project));
+        }
+
+        /// <summary>
+        /// Delete a project and everything belonging to it
+        /// </summary>
+        /// <param name="id">Project ID</param>
+        /// <remarks>
+        /// The project's tasks are removed with it, by the cascade delete configured on
+        /// the relationship.
+        /// </remarks>
+        [HttpDelete("{id:int}")]
+        [ProducesResponseType(204)]
+        [ProducesResponseType(typeof(ErrorResponseDto), 404)]
+        public async Task<IActionResult> DeleteProject(int id)
+        {
+            var userId = GetCurrentUserId();
+            var project = await _unitOfWork.Projects.GetByIdAsync(id);
+
+            if (project == null || project.CreatedById != userId)
+            {
+                return ProjectNotFound();
+            }
+
+            await _unitOfWork.Projects.DeleteAsync(project);
+            await _unitOfWork.SaveChangesAsync();
+
+            _logger.LogInformation("Project {ProjectId} deleted by user {UserId}", id, userId);
+
+            return NoContent();
+        }
+
+        /// <summary>
+        /// The single response used for both "no such project" and "not your project".
+        /// </summary>
+        private NotFoundObjectResult ProjectNotFound() =>
+            NotFound(new ErrorResponseDto { Message = "Project not found" });
 
         private int GetCurrentUserId()
         {
