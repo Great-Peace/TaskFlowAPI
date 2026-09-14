@@ -52,7 +52,14 @@ namespace TaskFlow.API.Controllers
         {
             var project = await _unitOfWork.Projects.GetWithTasksAsync(id);
 
-            if (project == null)
+            // A project is visible only to the user who created it. Without this check
+            // any authenticated caller could read any project simply by guessing its id.
+            //
+            // The response is 404 rather than 403: a 403 would confirm that a project
+            // with this id exists, which lets a caller enumerate other users' data by
+            // probing ids. Returning the same 404 for "not yours" and "not there"
+            // reveals nothing either way.
+            if (project == null || project.CreatedById != GetCurrentUserId())
             {
                 return NotFound(new ErrorResponseDto { Message = "Project not found" });
             }
