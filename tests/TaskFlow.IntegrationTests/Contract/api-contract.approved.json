@@ -1,0 +1,199 @@
+{
+  "Operations": {
+    "DELETE /api/Projects/{id}": {
+      "Responses": [
+        "204",
+        "404"
+      ],
+      "Parameters": {
+        "id": true
+      },
+      "RequiresAuthentication": true,
+      "RequiredRoles": []
+    },
+    "GET /api/Projects": {
+      "Responses": [
+        "200"
+      ],
+      "Parameters": {},
+      "RequiresAuthentication": true,
+      "RequiredRoles": []
+    },
+    "GET /api/Projects/{id}": {
+      "Responses": [
+        "200",
+        "404"
+      ],
+      "Parameters": {
+        "id": true
+      },
+      "RequiresAuthentication": true,
+      "RequiredRoles": []
+    },
+    "GET /api/Projects/all": {
+      "Responses": [
+        "200",
+        "403"
+      ],
+      "Parameters": {},
+      "RequiresAuthentication": true,
+      "RequiredRoles": [
+        "Admin"
+      ]
+    },
+    "POST /api/Auth/login": {
+      "Responses": [
+        "200",
+        "400",
+        "401"
+      ],
+      "Parameters": {},
+      "RequestBodySchema": "LoginDto",
+      "RequiresAuthentication": false,
+      "RequiredRoles": []
+    },
+    "POST /api/Auth/register": {
+      "Responses": [
+        "201",
+        "400"
+      ],
+      "Parameters": {},
+      "RequestBodySchema": "RegisterDto",
+      "RequiresAuthentication": false,
+      "RequiredRoles": []
+    },
+    "POST /api/Projects": {
+      "Responses": [
+        "201",
+        "400"
+      ],
+      "Parameters": {},
+      "RequestBodySchema": "CreateProjectDto",
+      "RequiresAuthentication": true,
+      "RequiredRoles": []
+    },
+    "PUT /api/Projects/{id}": {
+      "Responses": [
+        "200",
+        "400",
+        "404"
+      ],
+      "Parameters": {
+        "id": true
+      },
+      "RequestBodySchema": "UpdateProjectDto",
+      "RequiresAuthentication": true,
+      "RequiredRoles": []
+    }
+  },
+  "Schemas": {
+    "AuthResponseDto": {
+      "Properties": {
+        "email": "string",
+        "firstName": "string",
+        "lastName": "string",
+        "role": "string",
+        "token": "string",
+        "userId": "integer/int32"
+      },
+      "Required": []
+    },
+    "CreateProjectDto": {
+      "Properties": {
+        "description": "string",
+        "endDate": "string/date-time",
+        "name": "string",
+        "startDate": "string/date-time",
+        "status": "string"
+      },
+      "Required": [
+        "name"
+      ]
+    },
+    "ErrorResponseDto": {
+      "Properties": {
+        "errors": "object",
+        "message": "string"
+      },
+      "Required": []
+    },
+    "LoginDto": {
+      "Properties": {
+        "email": "string/email",
+        "password": "string"
+      },
+      "Required": [
+        "email",
+        "password"
+      ]
+    },
+    "ProblemDetails": {
+      "Properties": {
+        "detail": "string",
+        "instance": "string",
+        "status": "integer/int32",
+        "title": "string",
+        "type": "string"
+      },
+      "Required": []
+    },
+    "ProjectDto": {
+      "Properties": {
+        "createdAt": "string/date-time",
+        "createdById": "integer/int32",
+        "createdByName": "string",
+        "description": "string",
+        "endDate": "string/date-time",
+        "id": "integer/int32",
+        "name": "string",
+        "startDate": "string/date-time",
+        "status": "string",
+        "tasks": "array\u003CTaskItemDto\u003E"
+      },
+      "Required": []
+    },
+    "RegisterDto": {
+      "Properties": {
+        "confirmPassword": "string",
+        "email": "string/email",
+        "firstName": "string",
+        "lastName": "string",
+        "password": "string"
+      },
+      "Required": [
+        "confirmPassword",
+        "email",
+        "firstName",
+        "lastName",
+        "password"
+      ]
+    },
+    "TaskItemDto": {
+      "Properties": {
+        "assignedToId": "integer/int32",
+        "assignedToName": "string",
+        "createdAt": "string/date-time",
+        "description": "string",
+        "dueDate": "string/date-time",
+        "id": "integer/int32",
+        "priority": "string",
+        "projectId": "integer/int32",
+        "projectName": "string",
+        "status": "string",
+        "title": "string",
+        "updatedAt": "string/date-time"
+      },
+      "Required": []
+    },
+    "UpdateProjectDto": {
+      "Properties": {
+        "description": "string",
+        "endDate": "string/date-time",
+        "name": "string",
+        "startDate": "string/date-time",
+        "status": "string"
+      },
+      "Required": []
+    }
+  }
+}
