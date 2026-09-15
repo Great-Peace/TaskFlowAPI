@@ -333,7 +333,8 @@ startup, not test instability.
 
 ## Defects found and fixed
 
-Seven, each with a test written before the fix.
+Eight. The first seven each had a test written before the fix; the eighth is a
+configuration change, verified by observing startup with and without a key.
 
 | # | Defect | Severity | How it was found |
 |---|---|---|---|
@@ -344,6 +345,7 @@ Seven, each with a test written before the fix.
 | 5 | **`Project.CreatedAt` never assigned**, so every project stored `0001-01-01` and "newest first" ordering compared identical values | **Correctness** | Observed in a live response during Phase 0 |
 | 6 | **`POST` and `GET` returned different representations** of the same project (`createdByName` null on create) | **Correctness** | Observed in live responses |
 | 7 | **`JwtSettings:ExpiryInHours` was configured but ignored** by a hardcoded 24-hour expiry | **Correctness** | Reading the code during the Phase 0 assessment |
+| 8 | **Two JWT signing keys committed** in `appsettings.json` and `appsettings.Development.json`, allowing anyone with repository access to forge a token for any user | **Security** | Phase 0 assessment; removed during final validation |
 
 Two test defects were also found and fixed:
 
@@ -363,13 +365,18 @@ Azure DevOps project is connected, so [azure-pipelines.yml](../azure-pipelines.y
 has not been executed. It is structurally complete and its YAML parses, but no
 timing or pass/fail evidence exists for it and none is claimed.
 
-**GitHub Actions execution time.** [.github/workflows/ci.yml](../.github/workflows/ci.yml)
-is committed but the branch has not been pushed, so no run has occurred. Pushing
-the branch would produce real timings.
+**GitHub Actions execution time.** The `quality-engineering` branch has been
+pushed to `origin`, so [.github/workflows/ci.yml](../.github/workflows/ci.yml)
+will have been triggered. The run itself could not be observed from the
+environment this work was carried out in - outbound HTTPS to the GitHub API was
+unavailable, so no run status, duration or result can be quoted here. The
+workflow's timings should be read from the Actions tab rather than from this
+document.
 
 **Container smoke check in CI.** The smoke check step is defined in both
-pipelines but has only been reasoned about, not executed, because neither pipeline
-has run.
+pipelines. The equivalent check was performed by hand and passed - the image was
+built and the running container served the full request journey, recorded above -
+but the CI step itself has not been observed executing.
 
 ---
 
@@ -390,5 +397,8 @@ has run.
    it is a decision with a performance cost that should be made explicitly.
 5. **A known-vulnerable dependency remains**, analysed and accepted in
    [DEPENDENCY_DECISIONS.md](DEPENDENCY_DECISIONS.md).
-6. **`UnitOfWork.Dispose()` disposes the DI-owned `DbContext`**, a double dispose.
+6. **A signing key must now be configured before the application will start.**
+   This is deliberate - see the README - but it is a setup step that did not exist
+   before, and anyone cloning the repository will meet it.
+7. **`UnitOfWork.Dispose()` disposes the DI-owned `DbContext`**, a double dispose.
    Harmless in practice and left alone.
